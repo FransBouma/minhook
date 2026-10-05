@@ -403,34 +403,40 @@ static MH_STATUS EnableHookLL(UINT pos, BOOL enable)
         patchSize    += sizeof(JMP_REL_SHORT);
     }
 
-    if (!VirtualProtect(pPatchTarget, patchSize, PAGE_EXECUTE_READWRITE, &oldProtect))
-        return MH_ERROR_MEMORY_PROTECT;
-
-    if (enable)
+    HANDLE processHandle = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_WRITE, FALSE, GetCurrentProcessId());
+    if(NULL == processHandle)
     {
-        PJMP_REL pJmp = (PJMP_REL)pPatchTarget;
-        pJmp->opcode = 0xE9;
-        pJmp->operand = (INT32)((LPBYTE)pHook->pDetour - (pPatchTarget + sizeof(JMP_REL)));
+        return MH_ERROR_OPENPROCESS_FAILED;
+    }
 
-        if (pHook->patchAbove)
+    if(VirtualProtectEx(processHandle, pPatchTarget, patchSize, PAGE_EXECUTE_READWRITE, &oldProtect))
+    {
+        if(enable)
         {
-            PJMP_REL_SHORT pShortJmp = (PJMP_REL_SHORT)pHook->pTarget;
-            pShortJmp->opcode = 0xEB;
-            pShortJmp->operand = (INT8)(0 - (sizeof(JMP_REL_SHORT) + sizeof(JMP_REL)));
+            PJMP_REL pJmp = (PJMP_REL)pPatchTarget;
+            pJmp->opcode = 0xE9;
+            pJmp->operand = (UINT32)((LPBYTE)pHook->pDetour - (pPatchTarget + sizeof(JMP_REL)));
+
+            if(pHook->patchAbove)
+            {
+                PJMP_REL_SHORT pShortJmp = (PJMP_REL_SHORT)pHook->pTarget;
+                pShortJmp->opcode = 0xEB;
+                pShortJmp->operand = (UINT8)(0 - (sizeof(JMP_REL_SHORT) + sizeof(JMP_REL)));
+            }
         }
-    }
-    else
-    {
-        if (pHook->patchAbove)
-            memcpy(pPatchTarget, pHook->backup, sizeof(JMP_REL) + sizeof(JMP_REL_SHORT));
         else
-            memcpy(pPatchTarget, pHook->backup, sizeof(JMP_REL));
+        {
+            if(pHook->patchAbove)
+                memcpy(pPatchTarget, pHook->backup, sizeof(JMP_REL) + sizeof(JMP_REL_SHORT));
+            else
+                memcpy(pPatchTarget, pHook->backup, sizeof(JMP_REL));
+        }
+        VirtualProtectEx(processHandle, pPatchTarget, patchSize, oldProtect, &oldProtect);
     }
-
-    VirtualProtect(pPatchTarget, patchSize, oldProtect, &oldProtect);
-
     // Just-in-case measure.
     FlushInstructionCache(GetCurrentProcess(), pPatchTarget, patchSize);
+
+    CloseHandle(processHandle);
 
     pHook->isEnabled   = enable;
     pHook->queueEnable = enable;
